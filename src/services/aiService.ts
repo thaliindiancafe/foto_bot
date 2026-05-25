@@ -58,19 +58,23 @@ const rulePrompts: Record<string, string> = {
   ].join(' '),
 };
 
+// Отклоняем только при fail с уверенностью >= порога; иначе принимаем фото.
+const MIN_CONFIDENCE = config.AI_FAIL_MIN_CONFIDENCE;
+
 const SYSTEM_PROMPT = [
   'Ты проверяешь фотографии сотрудников для чек-листа.',
-  'FAIL ставь только если АБСОЛЮТНО уверен (confidence >= 0.90).',
+  `FAIL ставь только если АБСОЛЮТНО уверен (confidence >= ${MIN_CONFIDENCE}).`,
   'Если есть сомнения — ставь OK. Лучше пропустить чем ошибочно отклонить.',
   'Отвечай СТРОГО в формате JSON без markdown:',
   '{"verdict":"ok","reason":"...","confidence":0.95}',
   'verdict — только "ok" или "fail".',
-  'reason — краткое объяснение на русском (1-2 предложения).',
+  'reason — краткое объяснение ИСКЛЮЧИТЕЛЬНО на русском языке кириллицей (1-2 предложения).',
+  'ЗАПРЕЩЕНО использовать в reason любые буквы кроме кириллицы и латиницы (и обычной пунктуации).',
+  'НЕ используй арабский, фарси, китайский, тайский, иврит и другие письменности.',
+  'Если не знаешь русское слово — используй простое описательное выражение.',
   'confidence — число от 0.0 до 1.0, твоя уверенность в ответе.',
   'Не добавляй ничего кроме JSON.',
 ].join(' ');
-
-const MIN_CONFIDENCE = 0.90;
 
 const REFERENCE_SYSTEM_PROMPT = [
   'Ты проверяешь фотографии сотрудников для чек-листа.',
@@ -83,14 +87,17 @@ const REFERENCE_SYSTEM_PROMPT = [
   '- Фото может быть снято с другого угла — это нормально.',
   '',
   'ПРАВИЛА ВЕРДИКТА:',
-  '- FAIL только если ты АБСОЛЮТНО уверен (confidence >= 0.90) что фото не соответствует.',
+  '- FAIL только если ты АБСОЛЮТНО уверен что фото не соответствует.',
   '- Если есть хоть малейшее сомнение — ставь OK.',
   '- Лучше пропустить сомнительное фото, чем ошибочно отклонить.',
   '',
   'Отвечай СТРОГО в формате JSON без markdown:',
   '{"verdict":"ok","reason":"...","confidence":0.95}',
   'verdict — только "ok" или "fail".',
-  'reason — краткое объяснение на русском (1-2 предложения).',
+  'reason — краткое объяснение ИСКЛЮЧИТЕЛЬНО на русском языке кириллицей (1-2 предложения).',
+  'ЗАПРЕЩЕНО использовать в reason любые буквы кроме кириллицы и латиницы (и обычной пунктуации).',
+  'НЕ используй арабский, фарси, китайский, тайский, иврит и другие письменности.',
+  'Если не знаешь русское слово — используй простое описательное выражение.',
   'confidence — число от 0.0 до 1.0, твоя уверенность в ответе.',
   'Не добавляй ничего кроме JSON.',
 ].join(' ');
@@ -101,19 +108,90 @@ const referenceHints: Record<string, string> = {
   photo_relevance: 'Проверь что на фото тот же тип объекта/зоны что на эталоне.',
 };
 
-function buildReferencePrompt(aiRule: string, questionText: string): string {
-  const hint = referenceHints[aiRule] ?? 'Проверь что фото сотрудника соответствует эталону по содержанию.';
-  return `${hint}
+// A predefined key (uniform_check, photo_relevance, etc.) is short and snake_case.
+// Free-form descriptions from the checklists table contain spaces/sentences.
+function isPredefinedKey(aiRule: string): boolean {
+  return /^[a-z_]+$/i.test(aiRule.trim()) && aiRule.length < 40;
+}
 
-Вопрос из чек-листа: "${questionText}"`;
+/** Пункт (B) и подробное описание (G) из Google-таблицы, склеенные через \\n\\n */
+export function splitQuestionText(text: string): { title: string; description: string | null } {
+  const idx = text.indexOf('\n\n');
+  if (idx === -1) return { title: text.trim(), description: null };
+  const title = text.slice(0, idx).trim();
+  const description = text.slice(idx + 2).trim();
+  return { title, description: description.length > 0 ? description : null };
+}
+
+export function shouldRunPhotoAi(taskType: string | null | undefined): boolean {
+  return taskType === 'photo' || taskType === 'confirm_photo';
+}
+
+/**
+ * Строгое правило из конфига (uniform_check, текст из таблицы) или
+ * критерий из текста пункта чек-листа, если ai_rule не задан.
+ */
+export function resolvePhotoCheckRule(
+  aiRule: string | null | undefined,
+  questionText: string,
+): string {
+  const trimmedRule = aiRule?.trim();
+  if (trimmedRule) return trimmedRule;
+
+  const { title, description } = splitQuestionText(questionText);
+  const lines = [
+    'Проверь, что фото подтверждает выполнение пункта чек-листа.',
+    `Пункт: ${title}`,
+  ];
+  if (description) {
+    lines.push(`Требования и критерии из чек-листа: ${description}`);
+  }
+  lines.push(
+    'OK если на фото видно, что пункт в целом выполнен (нужная зона, объект или действие).',
+    'FAIL только при явном несоответствии, пустом/не по теме снимке.',
+    'Если сомневаешься — OK.',
+  );
+  return lines.join('\n');
+}
+
+function buildReferencePrompt(aiRule: string, questionText: string): string {
+  if (isPredefinedKey(aiRule)) {
+    const hint = referenceHints[aiRule] ?? 'Проверь что фото сотрудника соответствует эталону по содержанию.';
+    return `${hint}\n\nВопрос из чек-листа: "${questionText}"`;
+  }
+  // Free-form description from the checklists table — use as the criteria
+  return [
+    'Сравни фото сотрудника с эталоном по следующему критерию:',
+    aiRule,
+    '',
+    `Вопрос из чек-листа: "${questionText}"`,
+  ].join('\n');
 }
 
 function buildUserPrompt(aiRule: string, questionText: string): string {
-  const rulePrompt = rulePrompts[aiRule];
-  if (rulePrompt) {
-    return `${rulePrompt}\n\nВопрос из чек-листа: "${questionText}"`;
+  if (isPredefinedKey(aiRule)) {
+    const rulePrompt = rulePrompts[aiRule];
+    if (rulePrompt) {
+      return `${rulePrompt}\n\nВопрос из чек-листа: "${questionText}"`;
+    }
   }
-  return `Проверь фото по правилу: "${aiRule}".\nВопрос из чек-листа: "${questionText}"`;
+  // Free-form description — use as the criteria directly
+  return [
+    'Проверь фото по следующему критерию:',
+    aiRule,
+    '',
+    `Вопрос из чек-листа: "${questionText}"`,
+  ].join('\n');
+}
+
+// Strip writing systems the model sometimes hallucinates (Arabic, Hebrew, CJK,
+// Devanagari, Thai, Korean, Japanese, etc.). Cyrillic/Latin/punctuation/emoji stay.
+function sanitizeRussianReason(text: string): string {
+  const cleaned = text.replace(
+    /[֐-׿؀-ۿ܀-ݏݐ-ݿހ-޿ऀ-ॿঀ-৿਀-੿઀-૿଀-୿஀-௿ఀ-౿ಀ-೿ഀ-ൿ฀-๿຀-໿က-႟぀-ゟ゠-ヿ㐀-䶿一-鿿가-힯ﭐ-﷿ﹰ-﻿]/g,
+    '',
+  );
+  return cleaned.replace(/\s{2,}/g, ' ').trim();
 }
 
 function parseAiResponse(content: string): AiVerdict {
@@ -121,20 +199,31 @@ function parseAiResponse(content: string): AiVerdict {
   const parsed = JSON.parse(cleaned) as Record<string, unknown>;
 
   const verdict = parsed['verdict'] === 'fail' ? 'fail' : 'ok';
-  const reason = typeof parsed['reason'] === 'string' ? parsed['reason'] : 'Нет описания';
+  const rawReason = typeof parsed['reason'] === 'string' ? parsed['reason'] : 'Нет описания';
+  const reason = sanitizeRussianReason(rawReason) || 'Нет описания';
   let confidence = typeof parsed['confidence'] === 'number' ? parsed['confidence'] : 0.5;
   confidence = Math.max(0, Math.min(1, confidence));
 
   return { verdict, reason, confidence };
 }
 
+function mimeTypeForReferenceFile(filename: string): string {
+  const ext = path.extname(filename).toLowerCase();
+  if (ext === '.png') return 'image/png';
+  if (ext === '.webp') return 'image/webp';
+  if (ext === '.gif') return 'image/gif';
+  return 'image/jpeg';
+}
+
 async function loadReferencePhoto(filename: string): Promise<string | null> {
   try {
     const filePath = path.join(REFERENCE_PHOTOS_DIR, filename);
+    console.log('[ai] Loading reference photo from:', filePath);
     const buffer = await readFile(filePath);
+    console.log('[ai] Reference photo loaded OK, size:', buffer.length);
     return buffer.toString('base64');
-  } catch {
-    console.warn(`[aiService] Reference photo not found: ${filename}`);
+  } catch (err) {
+    console.warn(`[aiService] Reference photo not found: ${filename}`, err);
     return null;
   }
 }
@@ -172,14 +261,16 @@ export async function verifyPhoto(
       }
     }
 
-    console.log('[ai] referencePhoto:', referencePhoto);
+    console.log('[ai] referencePhoto:', referencePhoto, '| refFilename:', refFilename);
 
     const refBase64 = refFilename ? await loadReferencePhoto(refFilename) : null;
+    console.log('[ai] refBase64 loaded:', refBase64 ? `yes (${refBase64.length} chars)` : 'NO');
 
     let messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[];
 
-    if (refBase64) {
-      const refDataUrl = `data:image/jpeg;base64,${refBase64}`;
+    if (refBase64 && refFilename) {
+      const refMime = mimeTypeForReferenceFile(refFilename);
+      const refDataUrl = `data:${refMime};base64,${refBase64}`;
       messages = [
         { role: 'system', content: REFERENCE_SYSTEM_PROMPT },
         {

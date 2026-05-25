@@ -31,6 +31,15 @@ function generateKey(type: string, role: string): string {
   return `${type}_${role}_${ts}`;
 }
 
+/** Telegram не принимает сообщения длиннее ~4096 символов — админка падала молча на длинных чек-листах (менеджер). */
+const TELEGRAM_MESSAGE_SAFE = 3800;
+
+function singleLinePreview(text: string, maxLen: number): string {
+  const s = text.replace(/\r\n/g, '\n').replace(/\n+/g, ' ').replace(/\s+/g, ' ').trim();
+  if (s.length <= maxLen) return s;
+  return `${s.slice(0, Math.max(1, maxLen - 1))}…`;
+}
+
 // --- Хелперы ---
 
 async function sendChecklistView(ctx: Context, checklistId: number) {
@@ -44,7 +53,14 @@ async function sendChecklistView(ctx: Context, checklistId: number) {
   }
 
   const roleLabel = roles.find((r) => r.key === cl.role)?.label ?? cl.role;
-  const typeLabels: Record<string, string> = { open: 'Открытие', close: 'Закрытие', periodic: 'Периодический' };
+  const typeLabels: Record<string, string> = {
+    open: 'Открытие',
+    close: 'Закрытие',
+    periodic: 'Периодический',
+    manual: 'Ручной',
+    handover_open: 'Пересменка-открытие',
+    handover_close: 'Пересменка-закрытие',
+  };
   const typeLabel = typeLabels[cl.type] ?? cl.type;
 
   let schedule = '';
@@ -57,22 +73,36 @@ async function sendChecklistView(ctx: Context, checklistId: number) {
     schedule = `каждые ${cl.intervalHours}ч`;
   }
 
-  const lines = [
+  const headerLines = [
     `📋 ${cl.title}`,
     `Роль: ${roleLabel} | Тип: ${typeLabel}`,
     schedule ? `Расписание: ${schedule}` : '',
+    `Всего вопросов: ${cl.questions.length}`,
     '',
-    'Вопросы:',
+    'Превью (полный текст — по кнопке пункта ниже):',
   ];
+  const header = headerLines.filter(Boolean).join('\n');
 
-  cl.questions.forEach((q, i) => {
-    const aiTag = q.aiRule ? ` [${q.aiRule}]` : '';
-    lines.push(`${i + 1}. ${q.text}${aiTag}`);
-  });
+  const previewLines: string[] = [];
+  let budget = TELEGRAM_MESSAGE_SAFE - header.length - 80;
 
   if (cl.questions.length === 0) {
-    lines.push('(нет вопросов)');
+    previewLines.push('(нет вопросов)');
+  } else {
+    for (let i = 0; i < cl.questions.length; i++) {
+      const q = cl.questions[i];
+      const aiBit = q.aiRule ? ` · AI: ${singleLinePreview(q.aiRule, 70)}` : '';
+      const line = `${i + 1}. ${singleLinePreview(q.text, 200)}${aiBit}`;
+      if (line.length + 1 > budget) {
+        previewLines.push(`… ещё ${cl.questions.length - i} вопрос(ов) — откройте по кнопкам ниже`);
+        break;
+      }
+      previewLines.push(line);
+      budget -= line.length + 1;
+    }
   }
+
+  const messageText = [header, ...previewLines].join('\n');
 
   // Кнопки вопросов
   const qButtons = cl.questions.map((q, i) => [
@@ -91,15 +121,29 @@ async function sendChecklistView(ctx: Context, checklistId: number) {
     [Markup.button.callback('« Назад к списку', 'cl:list')],
   ];
 
-  await ctx.reply(
-    lines.filter(Boolean).join('\n'),
-    Markup.inlineKeyboard([...qButtons, ...actionButtons]),
-  );
+  const keyboard = Markup.inlineKeyboard([...qButtons, ...actionButtons]);
+
+  try {
+    await ctx.reply(messageText, keyboard);
+  } catch (error) {
+    console.error('[sendChecklistView] reply failed', error);
+    await ctx.reply(
+      `📋 ${cl.title}\n\nНе удалось отправить превью (слишком длинно для Telegram). Список вопросов — кнопками ниже.`,
+      keyboard,
+    );
+  }
 }
 
 export async function sendChecklistList(ctx: Context) {
+  // Показываем только русские источники. Переводы (_en/_hi/_fa) — машинные,
+  // регенерируются при каждом «📥 Обновить из таблицы», редактировать их
+  // руками бессмысленно: правки сотрутся на ближайшем синке.
   const checklists = await prisma.checklist.findMany({
-    orderBy: [{ role: 'asc' }, { type: 'asc' }],
+    where: {
+      role: { not: 'archived' },
+      language: 'ru',
+    },
+    orderBy: [{ role: 'asc' }, { displayOrder: 'asc' }, { title: 'asc' }],
   });
 
   if (checklists.length === 0) {
@@ -130,7 +174,15 @@ export async function sendChecklistList(ctx: Context) {
 
   buttons.push([Markup.button.callback('+ Создать чек-лист', 'cl:new')]);
 
-  await ctx.reply('📋 Управление чек-листами:', Markup.inlineKeyboard(buttons));
+  await ctx.reply(
+    '📋 Управление чек-листами\n\n' +
+      '<i>Показаны русские оригиналы. Переводы на английский, хинди и фарси ' +
+      'делает OpenAI автоматически при «Обновить из таблицы».</i>',
+    {
+      parse_mode: 'HTML',
+      ...Markup.inlineKeyboard(buttons),
+    },
+  );
 }
 
 // --- Регистрация хендлеров ---
@@ -145,9 +197,9 @@ export function registerChecklistAdmin(bot: Telegraf<Context>) {
     await sendChecklistList(ctx);
   });
 
-  // Noop для заголовков
+  // Noop для заголовков групп ролей (не чек-лист)
   bot.action('cl:noop', async (ctx) => {
-    await ctx.answerCbQuery();
+    await ctx.answerCbQuery('Это заголовок раздела. Выберите чек-лист под ним.');
   });
 
   // Назад к списку
@@ -186,8 +238,13 @@ export function registerChecklistAdmin(bot: Telegraf<Context>) {
     }
 
     const aiText = q.aiRule ?? 'нет';
+    const typeLine =
+      q.taskType === 'confirm'
+        ? 'Тип: подтверждение (✔️ Да / ✖️ Нет, без фото)'
+        : 'Тип: фото (сотрудник отправляет снимок)';
     const text = [
       `Вопрос #${q.order}: ${q.text}`,
+      typeLine,
       `AI-правило: ${aiText}`,
     ].join('\n');
 
@@ -223,11 +280,13 @@ export function registerChecklistAdmin(bot: Telegraf<Context>) {
     const roleKey = ctx.match[1];
     adminState.set(from.id, { type: 'newType', title: state.title, role: roleKey });
 
-    await ctx.reply('Выберите тип чек-листа:', Markup.inlineKeyboard([
-      [Markup.button.callback('Открытие (open)', 'cl:newType:open')],
-      [Markup.button.callback('Закрытие (close)', 'cl:newType:close')],
-      [Markup.button.callback('Периодический (periodic)', 'cl:newType:periodic')],
-    ]));
+      await ctx.reply('Выберите тип чек-листа:', Markup.inlineKeyboard([
+        [Markup.button.callback('Открытие (open)', 'cl:newType:open')],
+        [Markup.button.callback('Закрытие (close)', 'cl:newType:close')],
+        [Markup.button.callback('Периодический (periodic)', 'cl:newType:periodic')],
+        [Markup.button.callback('Пересменка-открытие', 'cl:newType:handover_open')],
+        [Markup.button.callback('Пересменка-закрытие', 'cl:newType:handover_close')],
+      ]));
   });
 
   // --- Создание: шаг 4 - выбор типа ---
@@ -368,9 +427,9 @@ export function registerChecklistAdmin(bot: Telegraf<Context>) {
     const qId = Number(ctx.match[1]);
 
     await ctx.reply('Выберите AI-правило:', Markup.inlineKeyboard([
-      [Markup.button.callback('uniform_check', `cl:setAi:${qId}:uniform_check`)],
-      [Markup.button.callback('cleanliness_check', `cl:setAi:${qId}:cleanliness_check`)],
-      [Markup.button.callback('steam_check', `cl:setAi:${qId}:steam_check`)],
+      [Markup.button.callback('👕 Проверка формы', `cl:setAi:${qId}:uniform_check`)],
+      [Markup.button.callback('🧼 Проверка чистоты', `cl:setAi:${qId}:cleanliness_check`)],
+      [Markup.button.callback('☕ Проверка кофемашины', `cl:setAi:${qId}:steam_check`)],
       [Markup.button.callback('Убрать правило', `cl:setAi:${qId}:none`)],
     ]));
   });
@@ -669,9 +728,9 @@ export function registerChecklistAdmin(bot: Telegraf<Context>) {
       adminState.set(from.id, { type: 'addQuestionAi', checklistId: state.checklistId, questionText: text });
 
       await ctx.reply('Добавить AI-правило?', Markup.inlineKeyboard([
-        [Markup.button.callback('uniform_check', `cl:setAi:${q.id}:uniform_check`)],
-        [Markup.button.callback('cleanliness_check', `cl:setAi:${q.id}:cleanliness_check`)],
-        [Markup.button.callback('steam_check', `cl:setAi:${q.id}:steam_check`)],
+        [Markup.button.callback('👕 Проверка формы', `cl:setAi:${q.id}:uniform_check`)],
+        [Markup.button.callback('🧼 Проверка чистоты', `cl:setAi:${q.id}:cleanliness_check`)],
+        [Markup.button.callback('☕ Проверка кофемашины', `cl:setAi:${q.id}:steam_check`)],
         [Markup.button.callback('Без правила', `cl:setAi:${q.id}:none`)],
       ]));
       return;

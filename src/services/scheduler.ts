@@ -4,19 +4,18 @@ import type { Context } from 'telegraf';
 import { prisma } from '../db/client.js';
 import { config } from '../config/index.js';
 import { getDriveClient } from './storage.js';
-
-type TimeWindow = { start: string; end: string };
-
-function parseTimeToMinutes(time: string): number {
-  const [h, m] = time.split(':').map((v) => Number.parseInt(v, 10));
-  return h * 60 + m;
-}
-
-function startOfDay(date: Date): Date {
-  const d = new Date(date);
-  d.setHours(0, 0, 0, 0);
-  return d;
-}
+import { processOutbox } from './outboxService.js';
+import { getBusinessDayBounds, getMinutesInTimeZone } from '../utils/businessTime.js';
+import {
+  CLOSING_REMINDER_TYPES,
+  DEFAULT_SHIFT_END_MINUTES,
+  DEFAULT_SHIFT_START_MINUTES,
+  getMinutesSinceOperationalStart,
+  getWindowDurationMinutes,
+  isWithinTimeWindow,
+  parseTimeToMinutes,
+  parseTimeWindows,
+} from '../utils/checklistTiming.js';
 
 /**
  * Проверяет, завершил ли пользователь данный чек-лист сегодня
@@ -47,7 +46,9 @@ async function sendReminder(
   checklistKey: string,
 ): Promise<void> {
   try {
-    await bot.telegram.sendMessage(
+    const { sendTranslatedToUser } = await import('../bot/i18nMiddleware.js');
+    await sendTranslatedToUser(
+      bot.telegram,
       telegramId,
       `📋 Пора пройти чек-лист: "${checklistTitle}"`,
       {
@@ -94,46 +95,12 @@ async function processSchedule(bot: Telegraf<Context>): Promise<void> {
   if (config.TEST_MODE) return;
 
   const now = new Date();
-  const nowMinutes = now.getHours() * 60 + now.getMinutes();
-  const todayStart = startOfDay(now);
+  const nowMinutes = getMinutesInTimeZone(now);
+  const { start: todayStart } = getBusinessDayBounds(now);
 
   const checklists = await prisma.checklist.findMany({
     include: { questions: true },
   });
-
-  // Группируем чек-листы по роли
-  const roleChecklists = new Map<string, typeof checklists>();
-  for (const cl of checklists) {
-    const list = roleChecklists.get(cl.role) ?? [];
-    list.push(cl);
-    roleChecklists.set(cl.role, list);
-  }
-
-  // Находим время open.end и close.start для каждой роли
-  const roleOpenEnd = new Map<string, number>();
-  const roleCloseStart = new Map<string, number>();
-
-  for (const [role, cls] of roleChecklists) {
-    for (const cl of cls) {
-      if (!cl.timeWindows) continue;
-      let windows: TimeWindow[] = [];
-      try {
-        windows = JSON.parse(cl.timeWindows) as TimeWindow[];
-      } catch {
-        continue;
-      }
-      for (const w of windows) {
-        if (cl.type === 'open') {
-          const end = parseTimeToMinutes(w.end);
-          roleOpenEnd.set(role, Math.max(roleOpenEnd.get(role) ?? 0, end));
-        } else if (cl.type === 'close') {
-          const start = parseTimeToMinutes(w.start);
-          const current = roleCloseStart.get(role);
-          roleCloseStart.set(role, current != null ? Math.min(current, start) : start);
-        }
-      }
-    }
-  }
 
   // Получаем всех пользователей с ролью
   const users = await prisma.user.findMany({
@@ -143,31 +110,23 @@ async function processSchedule(bot: Telegraf<Context>): Promise<void> {
   for (const user of users) {
     if (!user.role) continue;
 
-    const cls = roleChecklists.get(user.role) ?? [];
+    const cls = checklists.filter((cl) => cl.role === user.role);
 
     for (const cl of cls) {
-      if (cl.type === 'open' || cl.type === 'close') {
-        if (!cl.timeWindows) continue;
-        let windows: TimeWindow[] = [];
-        try {
-          windows = JSON.parse(cl.timeWindows) as TimeWindow[];
-        } catch {
-          continue;
-        }
+      const windows = parseTimeWindows(cl.timeWindows);
 
-        for (const w of windows) {
-          const start = parseTimeToMinutes(w.start);
-          const end = parseTimeToMinutes(w.end);
+      if (windows.length > 0) {
+        for (const window of windows) {
+          const start = parseTimeToMinutes(window.start);
+          const end = parseTimeToMinutes(window.end);
 
-          // Напоминание в начале окна
-          if (nowMinutes === start) {
-            const done = await hasCompletedOrMissedToday(user.id, cl.id, todayStart);
-            if (!done) {
-              await sendReminder(bot, user.telegramId, cl.title, cl.key);
-            }
+          // Для periodic с несколькими окнами в день (например, Большая восьмёрка)
+          // шлём напоминание в начале каждого окна — без проверки "done", чтобы
+          // менеджер получил все 4 пинга, даже если уже прошёл одну из проверок.
+          if (cl.type === 'periodic' && nowMinutes === start) {
+            await sendReminder(bot, user.telegramId, cl.title, cl.key);
           }
 
-          // Пропуск в конце окна
           if (nowMinutes === end) {
             const done = await hasCompletedOrMissedToday(user.id, cl.id, todayStart);
             if (!done) {
@@ -175,32 +134,38 @@ async function processSchedule(bot: Telegraf<Context>): Promise<void> {
             }
           }
         }
-      }
 
-      if (cl.type === 'periodic') {
-        // Проверка: сотрудник начал смену сегодня
-        if (!user.shiftStartedAt || user.shiftStartedAt < todayStart) continue;
-
-        const openEnd = roleOpenEnd.get(user.role);
-        const closeStart = roleCloseStart.get(user.role);
-        if (openEnd == null || closeStart == null) continue;
-
-        const intervalHours = cl.intervalHours ?? 2;
-        const intervalMinutes = intervalHours * 60;
-
-        // Напоминания каждые N часов между openEnd и closeStart
-        if (nowMinutes > openEnd && nowMinutes < closeStart) {
-          const elapsed = nowMinutes - openEnd;
-          if (elapsed % intervalMinutes === 0) {
-            const done = await hasCompletedOrMissedToday(user.id, cl.id, todayStart);
-            if (!done) {
-              await sendReminder(bot, user.telegramId, cl.title, cl.key);
-            }
+        if (CLOSING_REMINDER_TYPES.has(cl.type) && nowMinutes === (23 * 60 + 55)) {
+          const done = await hasCompletedOrMissedToday(user.id, cl.id, todayStart);
+          if (!done) {
+            await sendReminder(bot, user.telegramId, cl.title, cl.key);
           }
         }
 
-        // Пропуск periodic в момент closeStart
-        if (nowMinutes === closeStart) {
+        continue;
+      }
+
+      if (cl.type === 'periodic' && cl.intervalHours) {
+        const intervalMinutes = cl.intervalHours * 60;
+        const elapsed = getMinutesSinceOperationalStart(nowMinutes, DEFAULT_SHIFT_START_MINUTES);
+        const operatingDuration = getWindowDurationMinutes(
+          DEFAULT_SHIFT_START_MINUTES,
+          DEFAULT_SHIFT_END_MINUTES,
+        );
+
+        if (
+          isWithinTimeWindow(nowMinutes, DEFAULT_SHIFT_START_MINUTES, DEFAULT_SHIFT_END_MINUTES) &&
+          elapsed >= 0 &&
+          elapsed < operatingDuration &&
+          elapsed % intervalMinutes === 0
+        ) {
+          const done = await hasCompletedOrMissedToday(user.id, cl.id, todayStart);
+          if (!done) {
+            await sendReminder(bot, user.telegramId, cl.title, cl.key);
+          }
+        }
+
+        if (nowMinutes === DEFAULT_SHIFT_END_MINUTES) {
           const done = await hasCompletedOrMissedToday(user.id, cl.id, todayStart);
           if (!done) {
             await createMissedRun(user.id, cl.id);
@@ -219,7 +184,7 @@ async function cleanupOldDriveFiles(): Promise<void> {
   const rootFolderId = process.env.GOOGLE_DRIVE_FOLDER_ID;
   if (!rootFolderId || process.env.ENABLE_GOOGLE_DRIVE !== 'true') return;
 
-  const drive = getDriveClient();
+  const drive = await getDriveClient();
   const cutoff = new Date();
   cutoff.setDate(cutoff.getDate() - 30);
   const cutoffISO = cutoff.toISOString();
@@ -309,6 +274,13 @@ export function startScheduler(bot: Telegraf<Context>): void {
   cron.schedule('0 3 * * *', () => {
     cleanupOldDriveFiles().catch((error) => {
       console.error('[cleanup] Ошибка очистки Drive:', error);
+    });
+  });
+
+  // Каждую минуту — докачка отложенных событий outbox
+  cron.schedule('* * * * *', () => {
+    processOutbox().catch((error) => {
+      console.error('[outbox] Ошибка воркера:', error);
     });
   });
 

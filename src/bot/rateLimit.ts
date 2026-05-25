@@ -23,6 +23,10 @@ function getOrCreate(userId: number, now: number): UserCounters {
 }
 
 export const rateLimitMiddleware: MiddlewareFn<Context> = async (ctx, next) => {
+  // Inline-кнопки не должны расходовать лимит «сообщений в минуту» — иначе
+  // админ быстро кликает по чек-листам и перестаёт получать ответы.
+  if (ctx.callbackQuery) return next();
+
   const from = ctx.from;
   if (!from) return next();
 

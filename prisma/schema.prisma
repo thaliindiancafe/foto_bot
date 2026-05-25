@@ -14,12 +14,26 @@ model User {
   username   String?
   displayName String?
   role        String?
+  language    String   @default("ru")
   location    String?
   shiftStartedAt DateTime?
   createdAt  DateTime @default(now())
 
   runs   Run[]
   shifts Shift[]
+  userRoles UserRole[]
+}
+
+model UserRole {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  role      String
+  language  String   @default("ru")
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, role])
 }
 
 model Checklist {
@@ -29,6 +43,8 @@ model Checklist {
   description String?
   role        String
   type        String
+  language    String     @default("ru")
+  displayOrder Int       @default(100)
   timeWindows String?
   intervalHours Int?
 
@@ -36,48 +52,80 @@ model Checklist {
   runs      Run[]
 }
 
+model Translation {
+  id         Int      @id @default(autoincrement())
+  sourceLang String
+  targetLang String
+  sourceHash String
+  sourceText String
+  targetText String
+  createdAt  DateTime @default(now())
+
+  @@unique([sourceLang, targetLang, sourceHash])
+}
+
 model Question {
-  id          Int       @id @default(autoincrement())
-  checklistId Int
-  text        String
-  order       Int
-  isRequired  Boolean   @default(true)
-  taskType    String    @default("photo")
-  section     String?
+  id                  Int      @id @default(autoincrement())
+  checklistId         Int
+  text                String
+  order               Int
+  isRequired          Boolean  @default(true)
+  taskType            String   @default("photo")
+  section             String?
+  weight              Int      @default(50)
+  canSkip             Boolean  @default(false)
+  createViolationOnNo Boolean  @default(true)
   referencePhoto String?
   aiRule      String?
 
   checklist Checklist @relation(fields: [checklistId], references: [id], onDelete: Cascade)
   answers   Answer[]
+  violations Violation[]
 }
 
 model Run {
-  id          Int       @id @default(autoincrement())
-  userId      Int
-  checklistId Int
-  shiftId     Int?
-  startedAt   DateTime  @default(now())
-  completedAt DateTime?
+  id            Int       @id @default(autoincrement())
+  userId        Int
+  checklistId   Int
+  shiftId       Int?
+  startedAt     DateTime  @default(now())
+  completedAt   DateTime?
+  earnedWeight  Int?
+  possibleWeight Int?
+  scorePercent  Float?
+  hasDeviation  Boolean   @default(false)
+  violationCount Int      @default(0)
+  rejectedPhotoCount Int  @default(0)
 
   user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   checklist Checklist @relation(fields: [checklistId], references: [id])
   shift     Shift?    @relation(fields: [shiftId], references: [id])
   answers   Answer[]
+  violations Violation[]
 }
 
 model Answer {
-  id           Int      @id @default(autoincrement())
-  runId        Int
-  questionId   Int
-  value        String
-  aiVerdict    String?
-  aiReason     String?
-  aiConfidence Float?
-  photoHash    String?
-  createdAt    DateTime @default(now())
+  id             Int      @id @default(autoincrement())
+  runId          Int
+  questionId     Int
+  value          String
+  checkResult    String?
+  earnedWeight   Int?
+  possibleWeight Int?
+  aiVerdict      String?
+  aiReason       String?
+  aiConfidence   Float?
+  skipComment    String?
+  photoHash      String?
+  createdAt      DateTime @default(now())
+
+  deferCount       Int       @default(0)
+  firstDeferredAt  DateTime?
+  lastDeferredAt   DateTime?
 
   run      Run      @relation(fields: [runId], references: [id], onDelete: Cascade)
   question Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  violation Violation?
 }
 
 model Shift {
@@ -88,7 +136,7 @@ model Shift {
   minutes   Int?
   failCount Int?
 
-  user User @relation(fields: [userId], references: [id])
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
   runs Run[]
 }
 
@@ -114,4 +162,18 @@ model Outbox {
   lastError      String?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
+}
+
+model Violation {
+  id         Int       @id @default(autoincrement())
+  runId      Int
+  questionId Int
+  answerId   Int       @unique
+  status     String    @default("open")
+  createdAt  DateTime  @default(now())
+  resolvedAt DateTime?
+
+  run      Run      @relation(fields: [runId], references: [id], onDelete: Cascade)
+  question Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  answer    Answer   @relation(fields: [answerId], references: [id], onDelete: Cascade)
 }

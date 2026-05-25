@@ -1,0 +1,275 @@
+{
+  "description": "Drive file name (substring) → saved JPEG in src/config/reference_photos/ + checklist tasks to set reference_photo. Order: lower priority number is matched first (more specific).",
+  "rules": [
+    {
+      "priority": 10,
+      "match": "48отчет",
+      "saveAs": "ref_manager_48_report.jpg",
+      "applyTo": [
+        { "checklistId": "manager_open_ru", "order": 21 },
+        { "checklistId": "manager_close_ru", "order": 2 }
+      ]
+    },
+    {
+      "priority": 20,
+      "match": "м вход в рест",
+      "saveAs": "ref_manager_entrance.jpg",
+      "applyTo": [
+        { "checklistId": "manager_handover_open_ru", "order": 0 },
+        { "checklistId": "manager_handover_close_ru", "order": 0 },
+        { "checklistId": "manager_open_ru", "order": 0 }
+      ]
+    },
+    {
+      "priority": 30,
+      "match": "открытие смена открыта",
+      "saveAs": "ref_manager_iiko_shift_open.jpg",
+      "applyTo": [
+        { "checklistId": "manager_handover_open_ru", "order": 5 },
+        { "checklistId": "manager_handover_close_ru", "order": 5 }
+      ]
+    },
+    {
+      "priority": 40,
+      "match": "закрытия зона благовоний",
+      "saveAs": "ref_waiter_incense_hall1_close_clean.jpg",
+      "applyTo": [
+        { "checklistId": "waiter_handover_close_ru", "order": 9 },
+        { "checklistId": "waiter_handover_close_en", "order": 9 }
+      ]
+    },
+    {
+      "priority": 50,
+      "match": "открытие благовония 1 зал",
+      "saveAs": "ref_waiter_incense_hall1_open.jpg",
+      "applyTo": [
+        { "checklistId": "waiter_handover_open_ru", "order": 16 },
+        { "checklistId": "waiter_handover_open_en", "order": 16 }
+      ]
+    },
+    {
+      "priority": 60,
+      "match": "открытие закрытие чистые столы",
+      "saveAs": "ref_waiter_hall_tables_clean.jpg",
+      "applyTo": [
+        { "checklistId": "waiter_handover_open_ru", "order": 5 },
+        { "checklistId": "waiter_handover_open_en", "order": 5 }
+      ]
+    },
+    {
+      "priority": 70,
+      "match": "открытие закрытие стейшн",
+      "saveAs": "ref_waiter_station.jpg",
+      "applyTo": [
+        { "checklistId": "waiter_handover_open_ru", "order": 3 },
+        { "checklistId": "waiter_handover_open_en", "order": 3 },
+        { "checklistId": "waiter_handover_close_ru", "order": 4 },
+        { "checklistId": "waiter_handover_close_en", "order": 4 }
+      ]
+    },
+    {
+      "priority": 80,
+      "match": "сменка на месте",
+      "saveAs": "ref_waiter_street_shoes_box.jpg",
+      "applyTo": [
+        { "checklistId": "waiter_handover_open_ru", "order": 2 },
+        { "checklistId": "waiter_handover_open_en", "order": 2 },
+        { "checklistId": "waiter_open_ru", "order": 2 },
+        { "checklistId": "waiter_open_en", "order": 2 }
+      ]
+    },
+    {
+      "priority": 90,
+      "match": "сахарниц",
+      "saveAs": "ref_waiter_sugar_bowls.jpg",
+      "applyTo": [
+        { "checklistId": "waiter_handover_open_ru", "order": 4 },
+        { "checklistId": "waiter_handover_open_en", "order": 4 },
+        { "checklistId": "waiter_handover_close_ru", "order": 5 },
+        { "checklistId": "waiter_handover_close_en", "order": 5 }
+      ]
+    },
+    {
+      "priority": 100,
+      "match": "столы засервированы",
+      "saveAs": "ref_waiter_tables_served.jpg",
+      "applyTo": [
+        { "checklistId": "waiter_handover_open_ru", "order": 6 },
+        { "checklistId": "waiter_handover_open_en", "order": 6 }
+      ]
+    },
+    {
+      "priority": 110,
+      "match": "селфи",
+      "saveAs": "ref_waiter_uniform_selfie.jpg",
+      "applyTo": [
+        { "checklistId": "waiter_handover_open_ru", "order": 0 },
+        { "checklistId": "waiter_handover_open_en", "order": 0 },
+        { "checklistId": "waiter_open_ru", "order": 0 },
+        { "checklistId": "waiter_open_en", "order": 0 },
+        { "checklistId": "manager_handover_open_ru", "order": 2 },
+        { "checklistId": "manager_handover_close_ru", "order": 2 },
+        { "checklistId": "manager_open_ru", "order": 2 }
+      ]
+    },
+    {
+      "priority": 120,
+      "match": "раздевалка",
+      "saveAs": "ref_waiter_locker_room.jpg",
+      "applyTo": [
+        { "checklistId": "waiter_handover_open_ru", "order": 1 },
+        { "checklistId": "waiter_handover_open_en", "order": 1 }
+      ]
+    },
+    {
+      "priority": 130,
+      "match": "закрытие благовония бар",
+      "saveAs": "ref_waiter_incense_bar_close_clean.jpg",
+      "applyTo": [
+        { "checklistId": "waiter_handover_close_ru", "order": 8 },
+        { "checklistId": "waiter_handover_close_en", "order": 8 }
+      ]
+    },
+    {
+      "priority": 140,
+      "match": "оф закрытие зал2",
+      "saveAs": "ref_waiter_hall2_close.jpg",
+      "applyTo": [
+        { "checklistId": "waiter_handover_close_ru", "order": 2 },
+        { "checklistId": "waiter_handover_close_en", "order": 2 }
+      ]
+    },
+    {
+      "priority": 150,
+      "match": "гардероб",
+      "saveAs": "ref_waiter_cloakroom.jpg",
+      "applyTo": [
+        { "checklistId": "waiter_handover_close_ru", "order": 14 },
+        { "checklistId": "waiter_handover_close_en", "order": 14 }
+      ]
+    },
+    {
+      "priority": 160,
+      "match": "подносы чистые",
+      "saveAs": "ref_waiter_trays_clean.jpg",
+      "applyTo": [
+        { "checklistId": "waiter_handover_open_ru", "order": 14 },
+        { "checklistId": "waiter_handover_open_en", "order": 14 }
+      ]
+    },
+    {
+      "priority": 165,
+      "match": "благования напротив бара",
+      "saveAs": "ref_waiter_incense_bar_open_burning.jpg",
+      "applyTo": [
+        { "checklistId": "waiter_handover_open_ru", "order": 15 },
+        { "checklistId": "waiter_handover_open_en", "order": 15 }
+      ]
+    },
+    {
+      "priority": 170,
+      "match": "благовония напротив бара",
+      "saveAs": "ref_waiter_incense_bar_open_burning.jpg",
+      "applyTo": [
+        { "checklistId": "waiter_handover_open_ru", "order": 15 },
+        { "checklistId": "waiter_handover_open_en", "order": 15 }
+      ]
+    },
+    {
+      "priority": 190,
+      "match": "закрытие благовония лестница чисто",
+      "saveAs": "ref_waiter_incense_stairs_close_clean.jpg",
+      "applyTo": [
+        { "checklistId": "waiter_handover_close_ru", "order": 11 },
+        { "checklistId": "waiter_handover_close_en", "order": 11 }
+      ]
+    },
+    {
+      "priority": 200,
+      "match": "закрытие благовония су чисто",
+      "saveAs": "ref_waiter_incense_wc_close_clean.jpg",
+      "applyTo": [
+        { "checklistId": "waiter_handover_close_ru", "order": 10 },
+        { "checklistId": "waiter_handover_close_en", "order": 10 }
+      ]
+    },
+    {
+      "priority": 207,
+      "match": "закрытие барная стойка",
+      "saveAs": "ref_waiter_bar_counter_close.jpg",
+      "applyTo": []
+    },
+    {
+      "priority": 210,
+      "match": "закрытие меню ок вода",
+      "saveAs": "ref_waiter_bar_menu_water_close.jpg",
+      "applyTo": [
+        { "checklistId": "waiter_handover_close_ru", "order": 6 },
+        { "checklistId": "waiter_handover_close_en", "order": 6 }
+      ]
+    },
+    {
+      "priority": 215,
+      "match": "открытие меню ок вода",
+      "saveAs": "ref_waiter_bar_menu_water_open.jpg",
+      "applyTo": [
+        { "checklistId": "waiter_handover_open_ru", "order": 11 },
+        { "checklistId": "waiter_handover_open_en", "order": 11 }
+      ]
+    },
+    {
+      "priority": 220,
+      "match": "закрытие расходники",
+      "saveAs": "ref_waiter_consumables_close.jpg",
+      "applyTo": [
+        { "checklistId": "waiter_handover_close_ru", "order": 7 },
+        { "checklistId": "waiter_handover_close_en", "order": 7 }
+      ]
+    },
+    {
+      "priority": 230,
+      "match": "открытие расходники",
+      "saveAs": "ref_waiter_consumables_open.jpg",
+      "applyTo": [
+        { "checklistId": "waiter_handover_open_ru", "order": 12 },
+        { "checklistId": "waiter_handover_open_en", "order": 12 }
+      ]
+    },
+    {
+      "priority": 240,
+      "match": "открытие благовония лестница горят",
+      "saveAs": "ref_waiter_incense_stairs_open_burning.jpg",
+      "applyTo": [
+        { "checklistId": "waiter_handover_open_ru", "order": 18 },
+        { "checklistId": "waiter_handover_open_en", "order": 18 }
+      ]
+    },
+    {
+      "priority": 250,
+      "match": "открытие благовония су горят",
+      "saveAs": "ref_waiter_incense_wc_open_burning.jpg",
+      "applyTo": [
+        { "checklistId": "waiter_handover_open_ru", "order": 17 },
+        { "checklistId": "waiter_handover_open_en", "order": 17 }
+      ]
+    },
+    {
+      "priority": 260,
+      "match": "мухвос",
+      "saveAs": "ref_waiter_mukhvas.jpg",
+      "applyTo": [
+        { "checklistId": "waiter_handover_open_ru", "order": 10 },
+        { "checklistId": "waiter_handover_open_en", "order": 10 }
+      ]
+    },
+    {
+      "priority": 270,
+      "match": "открытие тряпки",
+      "saveAs": "ref_waiter_rags_open.jpg",
+      "applyTo": [
+        { "checklistId": "waiter_handover_open_ru", "order": 8 },
+        { "checklistId": "waiter_handover_open_en", "order": 8 }
+      ]
+    }
+  ]
+}

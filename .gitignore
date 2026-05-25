@@ -1,14 +1,37 @@
+# --- Node / build ---
 node_modules/
 dist/
+*.log
+
+# --- Env / secrets ---
 .env
 .env.local
 .env.*.local
-*.log
-*.db
-*.db-journal
-.DS_Store
-uploads/
-.cursor/
-.cursorrules/
 client_secret_*.json
 smenapro-*.json
+secrets/
+*-oauth.json
+token.json
+credentials.json
+
+# --- Database ---
+*.db
+*.db-journal
+*.sqlite
+*.sqlite-journal
+
+# --- Local storage (uploaded photos / temp) ---
+uploads/
+tmp/
+
+# --- Client / internal data (НЕ публиковать) ---
+outputs/
+parsed-waiter.json
+
+# --- IDE / editor / agent caches ---
+.cursor/
+.cursorrules/
+.claude/
+memory-bank/
+docs/
+.DS_Store

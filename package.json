@@ -9,7 +9,10 @@
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts",
     "db:migrate": "prisma migrate dev --name init",
-    "db:seed": "prisma db seed"
+    "db:seed": "prisma db seed",
+    "google:oauth": "tsx scripts/google-oauth-setup.ts",
+    "update:manager": "tsx scripts/updateManagerChecklists.ts",
+    "update:all": "tsx scripts/updateAllChecklists.ts"
   },
   "keywords": [
     "telegram",
@@ -20,6 +23,7 @@
   "dependencies": {
     "@prisma/adapter-better-sqlite3": "^7.4.2",
     "@prisma/client": "^7.4.0",
+    "adm-zip": "^0.5.17",
     "better-sqlite3": "^12.6.2",
     "dotenv": "^16.4.0",
     "googleapis": "^171.4.0",
@@ -29,6 +33,7 @@
     "telegraf": "^4.15.0"
   },
   "devDependencies": {
+    "@types/adm-zip": "^0.5.8",
     "@types/node": "^20.11.0",
     "@types/node-cron": "^3.0.11",
     "@types/sharp": "^0.31.1",

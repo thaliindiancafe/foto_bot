@@ -1,6 +1,10 @@
 import type { Context } from 'telegraf';
 import { prisma } from '../db/client.js';
-import type { RoleKey } from '../config/roles.js';
+import type { LanguageCode, RoleKey } from '../config/roles.js';
+
+export function resolveLocationForRole(role: RoleKey): 'restaurant' | 'cafe' {
+  return role === 'barista' ? 'cafe' : 'restaurant';
+}
 
 export async function ensureUserFromContext(ctx: Context) {
   const from = ctx.from;
@@ -36,8 +40,11 @@ export async function upsertRegisteredUser(params: {
   username: string | null;
   displayName: string;
   role: RoleKey;
+  language: LanguageCode;
   location?: string;
 }) {
+  const resolvedLocation = params.location ?? resolveLocationForRole(params.role);
+
   const user = await prisma.user.upsert({
     where: { telegramId: params.telegramId },
     create: {
@@ -47,7 +54,8 @@ export async function upsertRegisteredUser(params: {
       username: params.username,
       displayName: params.displayName,
       role: params.role,
-      location: params.location ?? null,
+      language: params.language,
+      location: resolvedLocation,
     },
     update: {
       firstName: params.firstName,
@@ -55,10 +63,58 @@ export async function upsertRegisteredUser(params: {
       username: params.username,
       displayName: params.displayName,
       role: params.role,
-      location: params.location ?? null,
+      language: params.language,
+      location: resolvedLocation,
     },
+  });
+
+  await prisma.userRole.upsert({
+    where: { userId_role: { userId: user.id, role: params.role } },
+    create: { userId: user.id, role: params.role, language: params.language },
+    update: { language: params.language },
   });
 
   return user;
 }
 
+/** Add an additional role+language for an existing user (does not switch active role). */
+export async function addUserRole(params: {
+  userId: number;
+  role: RoleKey;
+  language: LanguageCode;
+}) {
+  await prisma.userRole.upsert({
+    where: { userId_role: { userId: params.userId, role: params.role } },
+    create: { userId: params.userId, role: params.role, language: params.language },
+    update: { language: params.language },
+  });
+}
+
+/** Switch active role: pulls language and location from saved UserRole. */
+export async function switchActiveRole(params: { userId: number; role: RoleKey }) {
+  const userRole = await prisma.userRole.findUnique({
+    where: { userId_role: { userId: params.userId, role: params.role } },
+  });
+
+  if (!userRole) {
+    throw new Error(`User ${params.userId} does not have role ${params.role}`);
+  }
+
+  const location = resolveLocationForRole(params.role);
+
+  return prisma.user.update({
+    where: { id: params.userId },
+    data: {
+      role: params.role,
+      language: userRole.language,
+      location,
+    },
+  });
+}
+
+export async function getUserRoles(userId: number) {
+  return prisma.userRole.findMany({
+    where: { userId },
+    orderBy: { createdAt: 'asc' },
+  });
+}

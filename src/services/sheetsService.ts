@@ -1,6 +1,9 @@
 import { google } from 'googleapis';
-import type { Answer, Checklist, Run, User, Question, Shift } from '@prisma/client';
 
+import { findRoleByKey } from '../config/roles.js';
+import { loadServiceAccountCredentials } from '../utils/googleServiceAccount.js';
+
+/** ID таблицы из URL: .../spreadsheets/d/THIS_PART/edit */
 const SHEETS_ID = process.env.GOOGLE_SHEETS_ID;
 
 const LOCATION_TO_SHEET: Record<string, string> = {
@@ -8,11 +11,12 @@ const LOCATION_TO_SHEET: Record<string, string> = {
   cafe: 'Кофепоинт',
 };
 
-function getSheetsClient() {
-  const json = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
-  if (!json) throw new Error('GOOGLE_SERVICE_ACCOUNT_JSON не задан в .env');
+function resolveSheetName(location: string | null): string {
+  return LOCATION_TO_SHEET[location ?? 'restaurant'] ?? 'Ресторан';
+}
 
-  const credentials = JSON.parse(json) as { client_email: string; private_key: string };
+async function getSheetsClient() {
+  const credentials = await loadServiceAccountCredentials();
   const auth = new google.auth.JWT({
     email: credentials.client_email,
     key: credentials.private_key,
@@ -37,239 +41,255 @@ function formatTime(date: Date): string {
   });
 }
 
-type RunWithAnswers = Run & {
-  checklist: Checklist;
-  answers: (Answer & { question: Question })[];
-};
+function formatRoleLabel(roleKey: string): string {
+  if (!roleKey) return '';
+  return findRoleByKey(roleKey)?.label ?? roleKey;
+}
 
-export interface SingleAnswerData {
-  user: User;
+function formatTaskTypeLabel(taskType: string): string {
+  switch (taskType) {
+    case 'photo':
+      return 'Фото';
+    case 'confirm':
+      return 'Кнопка';
+    case 'confirm_photo':
+      return 'Фото / Кнопка';
+    default:
+      return taskType || '—';
+  }
+}
+
+/** I: результат AI; для кнопок без фото — прочерк */
+function formatAiResultColumn(payload: SingleAnswerPayload): string {
+  if (payload.aiVerdict) return payload.aiVerdict.toUpperCase();
+  if (payload.taskType === 'confirm') return '—';
+  return '';
+}
+
+/** J: комментарий AI */
+function formatAiReasonColumn(payload: SingleAnswerPayload): string {
+  if (payload.aiReason?.trim()) return payload.aiReason.trim();
+  if (payload.taskType === 'confirm') return 'без фото (кнопка Да/Нет)';
+  return '';
+}
+
+/** K: «Верно заполнено» — из AI или из ответа Да/Нет/Пропуск */
+function formatIsCorrect(payload: SingleAnswerPayload): string {
+  if (payload.aiVerdict === 'ok') return 'Да';
+  if (payload.aiVerdict === 'fail') return 'Нет';
+  switch (payload.checkResult) {
+    case 'yes':
+      return 'Да';
+    case 'no':
+      return 'Нет';
+    case 'skip':
+      return 'Пропуск';
+    default:
+      return '';
+  }
+}
+
+function cell(value: string | number | null | undefined): string {
+  if (value === null || value === undefined) return '';
+  return String(value);
+}
+
+export interface SingleAnswerPayload {
+  location: string | null;
+  displayName: string;
+  username: string | null;
+  role: string;
   checklistTitle: string;
   questionText: string;
   taskType: string;
+  questionSection?: string | null;
+  questionWeight?: number;
   photoUrl: string;
   aiVerdict?: string;
   aiReason?: string;
-  runStartedAt: Date;
+  checkResult?: string;
+  earnedWeight?: number;
+  possibleWeight?: number;
+  isViolation?: boolean;
+  skipComment?: string | null;
+  runStartedAtIso: string;
+  answeredAtIso: string;
+  // --- Аналитика «Вернуться к пункту позже» (creative-defer-button.md §5) ---
+  deferCount?: number;
+  firstDeferredAtIso?: string | null;
+  deferStatus?: 'deferred_done' | 'deferred_skipped' | null;
 }
 
-export async function appendSingleAnswer(data: SingleAnswerData): Promise<void> {
-  if (!SHEETS_ID) return;
+/** O: сколько раз пункт откладывали (0 — без откладывания). */
+function formatDeferCount(payload: SingleAnswerPayload): string {
+  return String(payload.deferCount ?? 0);
+}
 
-  const { user, checklistTitle, questionText, taskType, photoUrl, aiVerdict, aiReason, runStartedAt } = data;
-  const sheets = getSheetsClient();
-  const sheetName = LOCATION_TO_SHEET[user.location ?? 'restaurant'] ?? 'Ресторан';
-  const displayName = user.displayName ?? user.firstName ?? 'Сотрудник';
-  const username = user.username ? `@${user.username}` : '';
-  const role = user.role ?? '';
-  const now = new Date();
-  const aiResult = aiVerdict ?? '';
-  const isCorrect = aiVerdict === 'ok' ? 'Да' : aiVerdict === 'fail' ? 'Нет' : '';
+/** P: время первого откладывания (формат «дд.мм.гггг чч:мм»). */
+function formatFirstDeferredAt(payload: SingleAnswerPayload): string {
+  if (!payload.firstDeferredAtIso) return '';
+  const d = new Date(payload.firstDeferredAtIso);
+  return `${formatDate(d)} ${formatTime(d)}`;
+}
 
-  const row = [
-    formatDate(now),                        // Дата
-    displayName,                             // Имя сотрудника
-    username,                                // Никнейм TG
-    role,                                    // Роль
-    checklistTitle,                          // Чек-лист
-    questionText,                            // Задача
-    taskType,                                // Тип ответа
-    photoUrl,                                // Фото (ссылка)
-    aiResult,                                // Результат AI
-    aiReason ?? '',                          // Комментарий AI
-    isCorrect,                               // Верно заполнено
-    `${formatDate(runStartedAt)} ${formatTime(runStartedAt)}`, // Время начала
-    `${formatDate(now)} ${formatTime(now)}`, // Время ответа
-    '',                                      // Комментарий сотрудника
-  ];
-
-  try {
-    await sheets.spreadsheets.values.append({
-      spreadsheetId: SHEETS_ID,
-      range: `${sheetName}!A:N`,
-      valueInputOption: 'USER_ENTERED',
-      requestBody: { values: [row] },
-    });
-    console.log(`[sheets] Answer recorded: ${questionText.substring(0, 30)}... → ${aiResult || 'no AI'}`);
-  } catch (error) {
-    console.error('[sheets] Failed to record single answer:', error);
+/** Q: статус откладывания для фильтрации в Sheets. */
+function formatDeferStatus(payload: SingleAnswerPayload): string {
+  if ((payload.deferCount ?? 0) === 0) return '';
+  switch (payload.deferStatus) {
+    case 'deferred_done':
+      return 'Отложено → пройдено';
+    case 'deferred_skipped':
+      return 'Отложено → пропущено';
+    default:
+      return 'Отложено';
   }
 }
 
-export async function appendAnswers(
-  run: RunWithAnswers,
-  user: User,
-): Promise<void> {
+export async function appendSingleAnswer(payload: SingleAnswerPayload): Promise<void> {
   if (!SHEETS_ID) {
-    console.warn('[sheets] GOOGLE_SHEETS_ID not set, skipping');
+    console.warn('[sheets] GOOGLE_SHEETS_ID не задан — строка не записана');
     return;
   }
 
-  const sheetName = LOCATION_TO_SHEET[user.location ?? 'restaurant'] ?? 'Ресторан';
-  const sheets = getSheetsClient();
+  const sheets = await getSheetsClient();
+  const sheetName = resolveSheetName(payload.location);
+  const username = payload.username ? `@${payload.username}` : '';
+  const runStartedAt = new Date(payload.runStartedAtIso);
+  const answeredAt = new Date(payload.answeredAtIso);
 
-  const displayName = user.displayName ?? user.firstName ?? 'Сотрудник';
-  const username = user.username ? `@${user.username}` : '';
-  const role = user.role ?? '';
-  const checklistTitle = run.checklist.title;
-  const startTime = run.startedAt;
-  const endTime = run.completedAt ?? new Date();
+  // Колонки A–Q — таблица «СменаПро_Тхали» (листы Ресторан / Кофепоинт).
+  // O/P/Q добавлены для аналитики откладывания (см. creative-defer-button.md §5).
+  const row = [
+    cell(formatDate(answeredAt)),
+    cell(payload.displayName),
+    cell(username),
+    cell(formatRoleLabel(payload.role)),
+    cell(payload.checklistTitle),
+    cell(payload.questionText),
+    cell(formatTaskTypeLabel(payload.taskType)),
+    cell(payload.photoUrl),
+    cell(formatAiResultColumn(payload)),
+    cell(formatAiReasonColumn(payload)),
+    cell(formatIsCorrect(payload)),
+    cell(`${formatDate(runStartedAt)} ${formatTime(runStartedAt)}`),
+    cell(`${formatDate(answeredAt)} ${formatTime(answeredAt)}`),
+    cell(payload.skipComment),
+    cell(formatDeferCount(payload)),
+    cell(formatFirstDeferredAt(payload)),
+    cell(formatDeferStatus(payload)),
+  ];
 
-  const rows: string[][] = [];
+  const result = await sheets.spreadsheets.values.append({
+    spreadsheetId: SHEETS_ID,
+    range: `${sheetName}!A:Q`,
+    valueInputOption: 'USER_ENTERED',
+    insertDataOption: 'INSERT_ROWS',
+    requestBody: { values: [row] },
+  });
 
-  for (const answer of run.answers) {
-    const taskType = answer.question.taskType ?? 'photo';
-    const aiResult = answer.aiVerdict ?? '';
-    const isCorrect = answer.aiVerdict === 'ok' ? 'Да' : answer.aiVerdict === 'fail' ? 'Нет' : '';
-
-    rows.push([
-      formatDate(answer.createdAt),         // Дата
-      displayName,                           // Имя сотрудника
-      username,                              // Никнейм TG
-      role,                                  // Роль
-      checklistTitle,                        // Чек-лист
-      answer.question.text,                  // Задача
-      taskType,                              // Тип ответа
-      answer.value,                          // Фото (ссылка)
-      aiResult,                              // Результат AI
-      answer.aiReason ?? '',                 // Комментарий AI
-      isCorrect,                             // Верно заполнено
-      `${formatDate(startTime)} ${formatTime(startTime)}`, // Время начала
-      `${formatDate(endTime)} ${formatTime(endTime)}`,     // Время окончания
-      '',                                    // Комментарий сотрудника
-    ]);
-  }
-
-  if (rows.length === 0) return;
-
-  try {
-    await sheets.spreadsheets.values.append({
-      spreadsheetId: SHEETS_ID,
-      range: `${sheetName}!A:N`,
-      valueInputOption: 'USER_ENTERED',
-      requestBody: {
-        values: rows,
-      },
-    });
-    console.log(`[sheets] Appended ${rows.length} rows to "${sheetName}" for run #${run.id}`);
-  } catch (error) {
-    console.error(`[sheets] Failed to append rows for run #${run.id}:`, error);
-  }
+  const updatedRange = result.data.updates?.updatedRange ?? '?';
+  console.log(
+    `[sheets] answer → ${sheetName} ${updatedRange} (${row.filter((c) => c !== '').length}/17 cols)`,
+  );
 }
 
-export interface ShiftSummaryData {
-  shift: Shift;
-  user: User;
+export interface ShiftSummaryPayload {
+  location: string | null;
+  displayName: string;
+  role: string;
+  startedAtIso: string;
+  endedAtIso: string;
   failCount: number;
 }
 
-export async function recordShiftSummary(data: ShiftSummaryData): Promise<void> {
-  if (!SHEETS_ID) {
-    console.warn('[sheets] GOOGLE_SHEETS_ID not set, skipping shift summary');
-    return;
-  }
+export async function recordShiftSummary(payload: ShiftSummaryPayload): Promise<void> {
+  if (!SHEETS_ID) return;
 
-  const { shift, user, failCount } = data;
-  const sheets = getSheetsClient();
-
-  const displayName = user.displayName ?? user.firstName ?? 'Сотрудник';
-  const role = user.role ?? '';
-  const location = LOCATION_TO_SHEET[user.location ?? 'restaurant'] ?? 'Ресторан';
-  const startedAt = shift.startedAt;
-  const endedAt = shift.endedAt ?? new Date();
+  const sheets = await getSheetsClient();
+  const location = resolveSheetName(payload.location);
+  const startedAt = new Date(payload.startedAtIso);
+  const endedAt = new Date(payload.endedAtIso);
   const diffMs = endedAt.getTime() - startedAt.getTime();
   const hours = Math.round((diffMs / 3_600_000) * 10) / 10;
 
   const row = [
-    formatDate(startedAt),        // Дата
-    displayName,                   // Имя сотрудника
-    role,                          // Роль
-    location,                      // Локация
-    formatTime(startedAt),         // Начало смены
-    formatTime(endedAt),           // Конец смены
-    String(hours),                 // Отработано часов
-    String(failCount),             // Кол-во ошибок
+    formatDate(startedAt),
+    payload.displayName,
+    payload.role,
+    location,
+    formatTime(startedAt),
+    formatTime(endedAt),
+    String(hours),
+    String(payload.failCount),
   ];
 
-  try {
-    await sheets.spreadsheets.values.append({
-      spreadsheetId: SHEETS_ID,
-      range: 'Смены!A:H',
-      valueInputOption: 'USER_ENTERED',
-      requestBody: { values: [row] },
-    });
-    console.log(`[sheets] Shift summary recorded for ${displayName} (${hours}h, ${failCount} errors)`);
-  } catch (error) {
-    console.error('[sheets] Failed to record shift summary:', error);
-  }
+  await sheets.spreadsheets.values.append({
+    spreadsheetId: SHEETS_ID,
+    range: 'Смены!A:H',
+    valueInputOption: 'USER_ENTERED',
+    requestBody: { values: [row] },
+  });
 }
 
-export interface MonthlyStatsData {
-  user: User;
+export interface MonthlyStatsPayload {
+  location: string | null;
+  displayName: string;
+  role: string;
   hoursToAdd: number;
   errorsToAdd: number;
+  month: string; // "MM.YYYY"
 }
 
-export async function updateMonthlyStats(data: MonthlyStatsData): Promise<void> {
-  if (!SHEETS_ID) {
-    console.warn('[sheets] GOOGLE_SHEETS_ID not set, skipping monthly stats');
+export async function updateMonthlyStats(payload: MonthlyStatsPayload): Promise<void> {
+  if (!SHEETS_ID) return;
+
+  const sheets = await getSheetsClient();
+  const location = resolveSheetName(payload.location);
+
+  const existing = await sheets.spreadsheets.values.get({
+    spreadsheetId: SHEETS_ID,
+    range: 'Статистика!A:F',
+  });
+
+  const rows = existing.data.values ?? [];
+  let foundRowIndex = -1;
+
+  for (let i = 0; i < rows.length; i++) {
+    if (rows[i][0] === payload.month && rows[i][1] === payload.displayName) {
+      foundRowIndex = i;
+      break;
+    }
+  }
+
+  if (foundRowIndex >= 0) {
+    const currentHours = parseFloat(rows[foundRowIndex][4] ?? '0') || 0;
+    const currentErrors = parseInt(rows[foundRowIndex][5] ?? '0', 10) || 0;
+    const newHours = Math.round((currentHours + payload.hoursToAdd) * 10) / 10;
+    const newErrors = currentErrors + payload.errorsToAdd;
+    const rowNumber = foundRowIndex + 1;
+
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: SHEETS_ID,
+      range: `Статистика!E${rowNumber}:F${rowNumber}`,
+      valueInputOption: 'USER_ENTERED',
+      requestBody: { values: [[String(newHours), String(newErrors)]] },
+    });
     return;
   }
 
-  const { user, hoursToAdd, errorsToAdd } = data;
-  const sheets = getSheetsClient();
-
-  const displayName = user.displayName ?? user.firstName ?? 'Сотрудник';
-  const role = user.role ?? '';
-  const location = LOCATION_TO_SHEET[user.location ?? 'restaurant'] ?? 'Ресторан';
-  const now = new Date();
-  const month = `${String(now.getMonth() + 1).padStart(2, '0')}.${now.getFullYear()}`;
-
-  try {
-    // Прочитать все данные из листа "Статистика"
-    const existing = await sheets.spreadsheets.values.get({
-      spreadsheetId: SHEETS_ID,
-      range: 'Статистика!A:F',
-    });
-
-    const rows = existing.data.values ?? [];
-    let foundRowIndex = -1;
-
-    for (let i = 0; i < rows.length; i++) {
-      if (rows[i][0] === month && rows[i][1] === displayName) {
-        foundRowIndex = i;
-        break;
-      }
-    }
-
-    if (foundRowIndex >= 0) {
-      // Обновить существующую строку
-      const currentHours = parseFloat(rows[foundRowIndex][4] ?? '0') || 0;
-      const currentErrors = parseInt(rows[foundRowIndex][5] ?? '0', 10) || 0;
-      const newHours = Math.round((currentHours + hoursToAdd) * 10) / 10;
-      const newErrors = currentErrors + errorsToAdd;
-
-      const rowNumber = foundRowIndex + 1; // 1-based
-      await sheets.spreadsheets.values.update({
-        spreadsheetId: SHEETS_ID,
-        range: `Статистика!E${rowNumber}:F${rowNumber}`,
-        valueInputOption: 'USER_ENTERED',
-        requestBody: { values: [[String(newHours), String(newErrors)]] },
-      });
-      console.log(`[sheets] Monthly stats updated for ${displayName}: ${newHours}h, ${newErrors} errors`);
-    } else {
-      // Добавить новую строку
-      await sheets.spreadsheets.values.append({
-        spreadsheetId: SHEETS_ID,
-        range: 'Статистика!A:F',
-        valueInputOption: 'USER_ENTERED',
-        requestBody: {
-          values: [[month, displayName, role, location, String(hoursToAdd), String(errorsToAdd)]],
-        },
-      });
-      console.log(`[sheets] Monthly stats created for ${displayName}: ${hoursToAdd}h, ${errorsToAdd} errors`);
-    }
-  } catch (error) {
-    console.error('[sheets] Failed to update monthly stats:', error);
-  }
+  await sheets.spreadsheets.values.append({
+    spreadsheetId: SHEETS_ID,
+    range: 'Статистика!A:F',
+    valueInputOption: 'USER_ENTERED',
+    requestBody: {
+      values: [[
+        payload.month,
+        payload.displayName,
+        payload.role,
+        location,
+        String(payload.hoursToAdd),
+        String(payload.errorsToAdd),
+      ]],
+    },
+  });
 }
