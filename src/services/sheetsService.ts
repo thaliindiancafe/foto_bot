@@ -61,7 +61,8 @@ function formatTaskTypeLabel(taskType: string): string {
 
 /** I: результат AI; для кнопок без фото — прочерк */
 function formatAiResultColumn(payload: SingleAnswerPayload): string {
-  if (payload.aiVerdict) return payload.aiVerdict.toUpperCase();
+  if (payload.aiVerdict === 'ok') return '✅';
+  if (payload.aiVerdict === 'fail') return '❌';
   if (payload.taskType === 'confirm') return '—';
   return '';
 }
