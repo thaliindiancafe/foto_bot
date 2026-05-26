@@ -35,7 +35,7 @@ export const config = {
   BUSINESS_TIMEZONE: getOptionalEnv('BUSINESS_TIMEZONE') ?? 'Europe/Moscow',
   EXIF_MAX_AGE_MINUTES: getNumberEnv('EXIF_MAX_AGE_MINUTES', 10),
   /** Минимальная уверенность ИИ для отклонения фото (0–1). Выше = мягче (меньше отказов). */
-  AI_FAIL_MIN_CONFIDENCE: getFloatEnv('AI_FAIL_MIN_CONFIDENCE', 0.95),
+  AI_FAIL_MIN_CONFIDENCE: getFloatEnv('AI_FAIL_MIN_CONFIDENCE', 0.7),
   ADMIN_IDS: (getOptionalEnv('ADMIN_IDS') ?? '')
     .split(',')
     .map((id) => id.trim())
