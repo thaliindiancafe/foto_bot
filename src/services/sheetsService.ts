@@ -31,6 +31,7 @@ function formatDate(date: Date): string {
     day: '2-digit',
     month: '2-digit',
     year: 'numeric',
+    timeZone: 'Europe/Moscow',
   });
 }
 
@@ -38,6 +39,7 @@ function formatTime(date: Date): string {
   return date.toLocaleTimeString('ru-RU', {
     hour: '2-digit',
     minute: '2-digit',
+    timeZone: 'Europe/Moscow',
   });
 }
 
