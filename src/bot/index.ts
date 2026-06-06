@@ -652,7 +652,7 @@ async function completeRunAndSendSummary(ctx: Context, runId: number): Promise<v
   const scorePct = completed.scorePercent != null ? Math.round(completed.scorePercent) : null;
 
   const fmtTime = (d: Date | null) =>
-    d ? d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', timeZone: config.BUSINESS_TIMEZONE }) : '';
+    d ? d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: config.BUSINESS_TIMEZONE }) : '';
   const startedTime = fmtTime(completed.startedAt);
   const finishedTime = fmtTime(completed.completedAt ?? new Date());
 

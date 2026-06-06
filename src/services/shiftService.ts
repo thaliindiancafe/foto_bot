@@ -15,6 +15,8 @@ interface ShiftResult {
   failCount: number;
 }
 
+const MAX_SHIFT_MINUTES = 16 * 60;
+
 /**
  * Рассчитать и сохранить смену при завершении close чек-листа.
  *
@@ -57,19 +59,24 @@ export async function calculateAndSaveShift(
     );
     startedAt = closeRun.startedAt;
   } else {
-    // 2. Найти первый answer с uniform_check и verdict "ok"
+    // 2. Приоритет: uniform_check ok → первый ответ в open → создание open
     const uniformOkAnswer = openRun.answers.find(
       (a) => a.question.aiRule === 'uniform_check' && a.aiVerdict === 'ok',
     );
-
-    startedAt = uniformOkAnswer
-      ? uniformOkAnswer.createdAt
-      : openRun.startedAt;
+    const firstAnswer = openRun.answers[0];
+    startedAt = uniformOkAnswer?.createdAt ?? firstAnswer?.createdAt ?? openRun.startedAt;
   }
 
-  // 4. Рассчитать минуты
+  // 4. Рассчитать минуты с кэпом MAX_SHIFT_MINUTES
   const diffMs = closeEndedAt.getTime() - startedAt.getTime();
-  const minutes = Math.max(0, Math.round(diffMs / 60_000));
+  const rawMinutes = Math.max(0, Math.round(diffMs / 60_000));
+  let minutes = rawMinutes;
+  if (rawMinutes > MAX_SHIFT_MINUTES) {
+    console.warn(
+      `[shiftService] Smena длительность ${rawMinutes} мин (${(rawMinutes / 60).toFixed(1)}ч) превысила кэп ${MAX_SHIFT_MINUTES} мин — user=${userId}, openRun=${openRun?.id}, closeRun=${closeRun.id}. Капаю до ${MAX_SHIFT_MINUTES} мин.`,
+    );
+    minutes = MAX_SHIFT_MINUTES;
+  }
 
   // 5. Собрать все run-ы смены (open + periodic + close) без привязки к смене
   const shiftRuns = await prisma.run.findMany({
