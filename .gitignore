@@ -24,6 +24,9 @@ credentials.json
 uploads/
 tmp/
 
+# --- PM2 logs (папка logs/ нужна, сами логи нет) ---
+logs/*.log
+
 # --- Client / internal data (НЕ публиковать) ---
 outputs/
 parsed-waiter.json
